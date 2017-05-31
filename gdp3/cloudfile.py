@@ -189,7 +189,7 @@ class CloudFile():
             return file;
         else:
             log.error('status {}: {}'.format(res.status, sData));
-    def download(self, sOutPath=None, isForce=False, aRange=None, sExportMime=None):
+    def download(self, sOutPath=None, isAbuse=False, isForce=False, aRange=None, sExportMime=None):
         global log
         if (not self.sId):
             log.error('can not download file without ID');
@@ -201,8 +201,10 @@ class CloudFile():
             return False;
         mQuery = {
                 'alt': 'media',
-                'acknowledgeAbuse': 'true',
+                #'acknowledgeAbuse': 'true',
         };
+        if (isAbuse):
+            mQuery['acknowledgeAbuse'] = 'true';
         sUrl = self.sFileUrl;
         if (sExportMime):
             # export is not tested
