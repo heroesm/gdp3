@@ -69,7 +69,7 @@ class Config():
         );
         self.logHandler = logHandler = logging.StreamHandler();
         logHandler.setFormatter(formatter);
-        self.log = log = logging.getLogger();
+        self.log = log = logging.getLogger(__package__);
         log.handlers = [logHandler];
         log.setLevel(LOGLEVEL);
         #log.debug('configured.\napp type: {}\ndata directory: {}'.format(self.sClientType, self.sDataDir));

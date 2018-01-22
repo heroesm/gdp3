@@ -87,7 +87,7 @@ def getDir(sDir, token):
     global SUPERDIR;
     sSuperDir = SUPERDIR.strip();
     root = CloudFile('root', token)
-    if (sSuperDir):
+    if (sSuperDir and sSuperDir != 'root'):
         aFiles = root.getDirChildren(sSuperDir);
         if (aFiles):
             superDir = aFiles[0];
@@ -122,7 +122,7 @@ def uploadToDir(sFile, sDir, token=None, sToken=None, mMeta=None, isUnique=False
             log.warning('there is file with the same name under the same directory, uploading aborted');
             return False;
     sDirId = dir1.sId;
-    log.debug('directoryn name: {}, id: {}'.format(sDir, sDirId));
+    log.debug('directory name: {}, id: {}'.format(sDir, sDirId));
     aParents = [sDirId];
     mMeta.update({
             'parents': aParents
