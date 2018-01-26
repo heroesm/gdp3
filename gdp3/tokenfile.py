@@ -2,13 +2,16 @@
 
 import json
 import time
+import http.client
 import urllib.request
 import urllib.parse
 import urllib.error
 from os.path import exists, join
 import logging
+import socket
 
 from .config import config
+from .utility import Gdp3Error
 
 global log
 
@@ -23,6 +26,10 @@ def mergeQuery(sUrl, mQuery):
     parts = scheme, netloc, path, query, fragment;
     sUrl = urllib.parse.urlunsplit(parts);
     return sUrl
+
+class TokenExecueError(Gdp3Error):
+    def __init__(self, req):
+        self.req = req;
 
 class Token():
     mLoadMap = {
@@ -223,7 +230,7 @@ class Token():
         finally:
             if('file' in locals()): file.close();
 
-    def execute(self, sUrl, data=None, mQuery=None, mHeaders=None, sMethod=None):
+    def execute(self, sUrl, data=None, mQuery=None, mHeaders=None, sMethod=None, isStream=False):
         # sUrl can contain partial arguments (?)
         # data shall be bytes or iterable
         global log
@@ -231,8 +238,8 @@ class Token():
         assert sUrl
         if (not mQuery): mQuery = {};
         if (not mHeaders): mHeaders = {};
-        if (not sMethod and data is None):
-            sMethod = 'GET';
+        if (not sMethod and data is None): sMethod = 'GET';
+        if (isStream is None): isStream = False;
         sToken = self.getAccessToken();
         if (not sToken):
             log.error('no access token available, execution aborted');
@@ -243,17 +250,63 @@ class Token():
         });
         req = urllib.request.Request(sUrl, data=data, headers=mHeaders, method=sMethod);
         log.debug('"{}" to "{}"'.format(req.get_method(), req.full_url));
-        try:
-            res = urllib.request.urlopen(req, timeout=20);
-        except urllib.error.HTTPError as e:
-            log.error('request failed due to: {}'.format(e));
-            errRes = getattr(e, 'fp', None);
-            if (errRes):
-                sData = errRes.read().decode('utf-8');
-                sData and log.error(sData);
-                return errRes
+        nCount = 0;
+        n403Count = 0;
+        while nCount < config.nRetryCount:
+            try:
+                socket.setdefaulttimeout(30);
+                res = urllib.request.urlopen(req, timeout=30);
+                if (not isStream):
+                    sData = res.read().decode('utf-8');
+                    res.close();
+                else:
+                    sData = None;
+            except urllib.error.HTTPError as e:
+                if (e.code == 308):
+                    # incomplete upload
+                    res = getattr(e, 'fp', None);
+                    if (not isStream):
+                        sData = res.read().decode('utf-8');
+                        res.close();
+                    else:
+                        sData = None;
+                    return res, sData;
+                elif (e.code == 401):
+                    # unauthorised
+                    log.debug('try refreshing access token and request again ...');
+                    if (self.refreshToken()):
+                        sToken = self.sAccess;
+                        mHeaders.update({
+                                'Authorization': '{} {}'.format(self.sType, sToken)
+                        });
+                        req = urllib.request.Request(sUrl, data=data, headers=mHeaders, method=sMethod);
+                elif (e.code == 403):
+                    # usageLimits
+                    n403Count += 1;
+                    log.warning('request "{}" encouter 403 Error: "{}"; thread sleep for {} seconds ...'.format(sUrl, e, 9*n403Count));
+                    error = e;
+                    errRes = getattr(e, 'fp', None);
+                    if (errRes):
+                        sErrData = errRes.read().decode('utf-8');
+                        if (sErrData):
+                            log.error(sErrData);
+                    time.sleep(9*n403Count);
+                else:
+                    log.error('request "{}" failed due to: {}'.format(sUrl, e));
+                    raise;
+            except http.client.IncompleteRead as e:
+                error = e;
+                log.error('request "{}" failed due to: {}'.format(sUrl, e));
+            except urllib.error.URLError as e:
+                error = e;
+                log.error('request "{}" failed due to: {}'.format(sUrl, e));
+            except socket.timeout as e:
+                error = e;
+                log.error('request "{}" timeout: {}'.format(sUrl, e));
+            else:
+                return res, sData;
+            nCount += 1;
+        if (locals().get('error')):
+            raise TokenExecueError(req) from error;
         else:
-            #sRes = res.read().decode('utf-8');
-            #log.debug(sRes)
-            #res.close()
-            return res;
+            return errRes, sErrData;

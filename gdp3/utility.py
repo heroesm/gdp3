@@ -5,6 +5,13 @@ import logging
 
 log = logging.getLogger(__name__);
 
+class Gdp3Error(Exception):
+    pass
+
+
+# following are not used actually
+
+
 def prepareDir():
     global sHome
     global sDir

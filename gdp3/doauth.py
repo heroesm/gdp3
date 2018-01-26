@@ -58,8 +58,8 @@ def reAuth(sClientFile=None, sCodeFile=None, sTokenFile=None):
 
 def test():
     token = reAuth();
-    res = token.execute('https://www.googleapis.com/drive/v3/about?fields=user');
-    pprint(res.read().decode());
+    res, sData = token.execute('https://www.googleapis.com/drive/v3/about?fields=user');
+    pprint(sData);
     return token
 
 def main():

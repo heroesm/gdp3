@@ -5,7 +5,9 @@ import json
 import mimetypes
 import logging
 
+from .config import config
 from .tokenfile import Token
+from .utility import Gdp3Error
 
 global DIRTYPE
 global log, sApi
@@ -16,20 +18,43 @@ log = logging.getLogger(__name__);
 sApi = 'https://www.googleapis.com/drive/v3/files';
 
 def writeToFile(res, sFile):
+    if (config.isShowProgress):
+        stream = sys.stdout;
+    else:
+        stream = open(os.devnull, 'w');
     with open(sFile, 'xb') as file:
         log.info('start downloading to file "{}"'.format(sFile));
         n = 1024**2;
         i = 1;
         bData = res.read(n);
-        sys.stdout.write('\n');
+        stream.write('\n');
         while bData:
             file.write(bData);
-            sys.stdout.write('\r{} MB downloaded'.format(i));
+            stream.write('\r{} MB downloaded'.format(i));
             bData = res.read(n);
             i += 1;
-        sys.stdout.write('\n');
+        stream.write('\n');
+        stream.flush();
         log.info('download completed');
         return sFile
+
+class DirCheckError(Gdp3Error):
+    def __init__(self, file):
+        self.file = file;
+
+class GetMetadataError(Gdp3Error):
+    def __init__(self, file, res=None, sData=None):
+        self.file = file;
+        self.res = res;
+        self.status = res.status if res else None;
+        self.sData = sData;
+
+class ListError(Gdp3Error):
+    def __init__(self, file, res=None, sData=None):
+        self.file = file;
+        self.res = res;
+        self.status = res.status if res else None;
+        self.sData = sData;
 
 class CloudFile():
 
@@ -82,6 +107,11 @@ class CloudFile():
         self.token = token;
         if (not sId):
             log.warning('file ID not given');
+    def __repr__(self):
+        if (self.sName):
+            return '<CloudFile "{}" - "{}">'.format(self.sName, self.sMime);
+        else:
+            return super().__repr__();
     def authCheck(self):
         return self.token and self.token.getAccessToken();
     def dirCheck(self):
@@ -95,11 +125,16 @@ class CloudFile():
                 return False;
         else:
             return False;
-    def getMetadata(self, sFields=None, sExportMime=None):
+    def getMetadata(self, sFields=None, sExportMime=None, isRaise=True):
         global log
+        if (isRaise is None):
+            isRaise = True;
         if (not self.sId):
             log.error('can not get metadata without ID');
-            return False;
+            if (isRaise):
+                raise GetMetadataError(self);
+            else:
+                return False;
         if (not sFields):
             aFields = ('id', 'name', 'mimeType', 'parents', 'size', 'webContentLink', 'modifiedTime', 'createdTime');
             sFields = ','.join(aFields);
@@ -111,9 +146,7 @@ class CloudFile():
             # export is not tested
             sUrl += '/export';
             mQuery['mimeType'] = sExportMime;
-        res = self.token.execute(sUrl, mQuery=mQuery);
-        sData = res.read().decode('utf-8');
-        res.close();
+        res, sData = self.token.execute(sUrl, mQuery=mQuery);
         if (res.status == 200):
             mData = json.loads(sData);
             self.mMetadata.update(mData);
@@ -123,11 +156,19 @@ class CloudFile():
                 self.aParents = [];
             return mData;
         else:
-            log.error('status {}: {}'.format(res.status, sData));
-    def list(self, sFilter=None, sOrderBy='', sFields='', sPageToken=''):
+            log.error('getting metadata status {}: {}'.format(res.status, sData));
+            if (isRaise):
+                raise GetMetadataError(self, res, sData);
+            else:
+                return False;
+    def list(self, sFilter=None, sOrderBy='', sFields='', sPageToken='', isRaise=True):
         global log
-        if (sFilter is None and self.dirCheck()):
-            sFilter = "'{}' in parents".format(self.sId);
+        if (isRaise is None):
+            isRaise is True;
+        if (sFilter is None):
+            sFilter = 'trashed = false';
+            if (self.dirCheck()):
+                sFilter += " and '{}' in parents".format(self.sId);
         if (not sOrderBy):
             sOrderBy = 'folder,createdTime,name';
         if (not sFields):
@@ -141,12 +182,37 @@ class CloudFile():
         if (sPageToken): mQuery['pageToken'] = sPageToken;
         mHeaders = {};
         sUrl = self.sApi;
-        res =  self.token.execute(sUrl, mQuery=mQuery, mHeaders=mHeaders);
-        sData = res.read().decode('utf-8');
-        res.close();
+
+        aFiles = []
+        while True:
+            if (sPageToken):
+                mQuery['pageToken'] = sPageToken;
+            res, sData =  self.token.execute(sUrl, mQuery=mQuery, mHeaders=mHeaders);
+            if (res.status == 200):
+                mData = json.loads(sData);
+                #log.debug('list result: {}'.format(mData));
+                aMetas = mData.get('files', []);
+                for mMeta in aMetas:
+                    file = CloudFile(mMeta['id'], self.token);
+                    file.mMetadata.update(mMeta);
+                    aFiles.append(file);
+                sPageToken = mData.get('nextPageToken', '');
+                if (sPageToken):
+                    log.debug('pages remaining, continue ...'.format(sPageToken));
+                else:
+                    break;
+            else:
+                log.error('list status {}: {}'.format(res.status, sData));
+                if (isRaise):
+                    raise ListError(self, res, sData);
+                else:
+                    return False;
+        return aFiles;
+
+        res, sData =  self.token.execute(sUrl, mQuery=mQuery, mHeaders=mHeaders);
         if (res.status == 200):
             mData = json.loads(sData);
-            log.debug('list result: {}'.format(mData));
+            #log.debug('list result: {}'.format(mData));
             sPageToken = mData.get('nextPageToken', '');
             if (sPageToken):
                 log.warning('pages remaining, token: {}'.format(sPageToken));
@@ -158,7 +224,12 @@ class CloudFile():
                 aFiles.append(file);
             return aFiles;
         else:
-            log.error('status {}: {}'.format(res.status, sData));
+            log.error('list status {}: {}'.format(res.status, sData));
+            if (isRaise):
+                raise ListError(self, res, sData);
+            else:
+                return False;
+
     def create(self, sId='', sName='', sMimeType='', aParents=[], isKeep=False):
         global log
         sMethod = 'POST';
@@ -176,19 +247,18 @@ class CloudFile():
         mHeaders = {};
         mHeaders['Content-Type'] = 'application/json; charset=UTF-8';
         mHeaders['Content-Length'] = len(bMeta);
-        res = self.token.execute(sUrl, data=bMeta, mQuery=mQuery, mHeaders=mHeaders, sMethod=sMethod);
-        sData = res.read().decode('utf-8');
-        res.close();
+        res, sData = self.token.execute(sUrl, data=bMeta, mQuery=mQuery, mHeaders=mHeaders, sMethod=sMethod);
         if (res.status == 200):
             mData = json.loads(sData);
             sId = mData.get('id');
             sName = mData.get('name');
             file = CloudFile(sId, self.token);
             file.mMetadata.update(mData);
-            log.info('file "{}" with ID "{}" created'.format(sName, sId));
+            log.debug('file "{}" with ID "{}" created'.format(sName, sId));
             return file;
         else:
-            log.error('status {}: {}'.format(res.status, sData));
+            log.error('create status {}: {}'.format(res.status, sData));
+            return False;
     def download(self, sOutPath=None, isAbuse=False, isForce=False, aRange=None, sExportMime=None):
         global log
         if (not self.sId):
@@ -214,14 +284,14 @@ class CloudFile():
         mHeaders = {};
         if (aRange):
             mHeaders['Range'] = 'bytes={d}-{d}'.format(aRange[0], aRange[1]);
-        res = self.token.execute(sUrl, mQuery=mQuery, mHeaders=mHeaders);
+        res, _ = self.token.execute(sUrl, mQuery=mQuery, mHeaders=mHeaders, isStream=True);
         try:
             if (res.status == 200):
                 writeToFile(res, sOutPath);
                 log.info('file "{}" downloaded to "{}"'.format(self.sName, os.path.abspath(sOutPath)));
                 return True;
             else:
-                sData = res.read().decode('utf-8');
+                sData = _ or res.read().decode('utf-8');
                 log.error('download failed: {}'.format(sData));
                 return False;
         finally:
@@ -244,12 +314,11 @@ class CloudFile():
         else:
             sMethod = 'DELETE';
             sUrl = self.sFileUrl;
-            res = self.token.execute(sUrl, sMethod=sMethod);
+            res, sData = self.token.execute(sUrl, sMethod=sMethod);
             if (res.status == 204):
                 log.info('status "{}", file "{}" with ID "{}" deleted'.format(res.status, self.sName, self.sId));
             else:
-                log.warning('status "{}: {}'.format(res.status, res.read().decode()));
-            res.close();
+                log.warning('status "{}: {}'.format(res.status, sData));
             return True;
     def rmdir(self):
         global log
@@ -278,9 +347,7 @@ class CloudFile():
         mHeaders = {};
         mHeaders['Content-Type'] = 'application/json; charset=UTF-8';
         mHeaders['Content-Length'] = len(bData);
-        res = self.token.execute(sUrl, data=bData, mQuery=mQuery, mHeaders=mHeaders, sMethod=sMethod);
-        sData = res.read().decode('utf-8');
-        res.close();
+        res, sData = self.token.execute(sUrl, data=bData, mQuery=mQuery, mHeaders=mHeaders, sMethod=sMethod);
         if (res.status == 200):
             mData = json.loads(sData);
             file = CloudFile(mData['id'], self.token);
@@ -299,20 +366,18 @@ class CloudFile():
         mQuery = {}
         if (aRemoveParents): mQuery['removeParents'] = ','.join(aRemoveParents);
         if (aAddParents): mQuery['addParents'] = ','.join(aAddParents);
-        aFilter = ('modifiedTime', 'appProperties', 'description', 'mimeType', 'name', 'properties', 'starred', 'trashed');
-        mMeta = {key: value for (key, value) in self.mMetadata.items() if key in aFilter};
+        aFields = ('modifiedTime', 'appProperties', 'description', 'mimeType', 'name', 'properties', 'starred', 'trashed');
+        mMeta = {key: value for (key, value) in self.mMetadata.items() if key in aFields};
         mQuery['fields'] = ','.join(mMeta.keys());
         bData = json.dumps(mMeta).encode('utf-8');
         mHeaders = {};
         mHeaders['Content-Type'] = 'application/json; charset=UTF-8';
         mHeaders['Content-Length'] = len(bData);
-        res = self.token.execute(sUrl, data=bData, mQuery=mQuery, mHeaders=mHeaders, sMethod=sMethod);
-        sData = res.read().decode('utf-8');
-        res.close();
+        res, sData = self.token.execute(sUrl, data=bData, mQuery=mQuery, mHeaders=mHeaders, sMethod=sMethod);
         if (res.status == 200):
             mData = json.loads(sData);
             log.info('metadate updated: {}'.format(mData));
-            self.getMetadata();
+            self.getMetadata(isRaise=False);
             return True;
         else:
             log.error('status {}: {}'.format(res.status, sData));
@@ -331,22 +396,28 @@ class CloudFile():
             return False;
         else:
             if (sName):
-                sFilter = "name = '{}' and '{}' in parents".format(sName, self.sId);
+                sFilter = "name = '{}' and '{}' in parents and trashed = false".format(sName, self.sId);
             else:
-                sFilter = "'{}' in parents".format(self.sId);
+                sFilter = "'{}' in parents and trashed = false".format(self.sId);
             aFiles = self.list(sFilter);
-            return aFiles;
+            if (aFiles is not False):
+                return aFiles;
+            else:
+                return False;
     def getDirChildren(self, sName=None):
         global DIRTYPE;
         if (not self.dirCheck()):
             return False;
         else:
             if (sName):
-                sFilter = "name = '{}' and '{}' in parents and mimeType = '{}'".format(sName, self.sId, DIRTYPE);
+                sFilter = "name = '{}' and '{}' in parents and mimeType = '{}' and trashed = false".format(sName, self.sId, DIRTYPE);
             else:
-                sFilter = "'{}' in parents and mimeType='{}'".format(self.sId, DIRTYPE);
+                sFilter = "'{}' in parents and mimeType = '{}' and trashed = false".format(self.sId, DIRTYPE);
             aFiles = self.list(sFilter);
-            return aFiles;
+            if (aFiles is not False):
+                return aFiles;
+            else:
+                return False;
     def trash(self):
         global log
         if (self.mMetadata.get('trashed') == True):

@@ -1,3 +1,4 @@
+import sys
 import os
 from os.path import split, join, exists
 import logging
@@ -11,6 +12,8 @@ DATADIR = 'data';
 LOGLEVEL = logging.DEBUG;
 CLIENT = 'client_secret.json'
 WEBCLIENT = 'web_client_secret.json'
+RETRYCOUNT = 3;
+SHOWPROGRESS = True;
 
 # variables for reference, normally not used
 sApi = 'https://www.googleapis.com/drive/v3/';
@@ -35,12 +38,14 @@ class Config():
     sSessionFile = join(sDataDir, 'sessionURI.log');
     log = None;
     logHandler = None;
+    nRetryCount = RETRYCOUNT or 3;
+    isShowProgress = SHOWPROGRESS or False;
 
     def __init__(self, isWeb=None, sDataDir=None):
         self.__dict__.update({
             key: value
             for (key, value) in type(self).__dict__.items()
-            if not key.startswith('__')
+            if not key.startswith('__') and not hasattr(value, '__call__')
         });
         if (isWeb is not None): self.isWeb = isWeb;
         if (sDataDir): self.sDataDir= sDataDir;
@@ -64,14 +69,15 @@ class Config():
         #        datefmt='%Y-%m-%d %H:%M:%S'
         #);
         formatter = logging.Formatter(
-                fmt= '    %(asctime)s %(levelname)-5s - %(name)s:%(lineno)d:\n%(message)s',
+                fmt='    %(asctime)s %(levelname)-5s - %(filename)s:%(lineno)d:\t%(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S'
         );
-        self.logHandler = logHandler = logging.StreamHandler();
+        self.logHandler = logHandler = logging.StreamHandler(sys.stdout);
         logHandler.setFormatter(formatter);
         self.log = log = logging.getLogger(__package__);
         log.handlers = [logHandler];
         log.setLevel(LOGLEVEL);
+        log.propagate = False;
         #log.debug('configured.\napp type: {}\ndata directory: {}'.format(self.sClientType, self.sDataDir));
 
     def getClientPath(self):

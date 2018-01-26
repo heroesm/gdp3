@@ -30,19 +30,24 @@ def loadFromFile(sFile=None, nCursor=None):
     global log
     if (not sFile): sFile;
     if (not nCursor): nCursor;
+    if (config.isShowProgress):
+        stream = sys.stdout;
+    else:
+        stream = open(os.devnull, 'w');
     with open(sFile, 'rb') as file:
         file.seek(nCursor);
         log.debug('reading from bytes {} in file {}'.format(file.tell(), sFile));
-        sys.stdout.write('\n');
+        stream.write('\n');
         n = 1024**2;
         i = 1;
         bData = file.read(n);
         while (bData):
             yield bData
-            sys.stdout.write('\r{} MB processed'.format(i));
+            stream.write('\r{} MB processed'.format(i));
             bData = file.read(n);
             i += 1;
-    sys.stdout.write('\n');
+    stream.write('\n');
+    stream.flush();
 
 class File():
     sApi = 'https://www.googleapis.com/upload/drive/v3/files';
@@ -60,7 +65,7 @@ class File():
             4: 'error condition'
     }
 
-    def __init__(self, sFile, token=None, sTokenFile=None, mMeta=None, sMime=None):
+    def __init__(self, sFile, token=None, sTokenFile=None, mMeta=None, sName=None, sMime=None):
         global log
         if (not os.path.exists(sFile)):
             raise FileNotFoundError('the file to be uploaded "{}" does not exist'
@@ -69,6 +74,8 @@ class File():
         self.sFile = sFile;
         log.debug('file to be uploaded: {}'.format(sFile));
         self.mMeta = mMeta or {};
+        if (sName):
+            mMeta['name'] = str(sName);
         if (not sMime):
             sMime = mimetypes.guess_type(sFile)[0];
             if (not sMime):
@@ -88,6 +95,8 @@ class File():
         self.nError = None;
         self.nBirth = 0;
         self.sId = None;
+    def __repr__(self):
+        return '<File "{}">'.format(self.sFile);
     def shift(self, nNew):
         global log
         log.debug('shift from status "{}" to "{}"'.format(self.mStatus[self.nStatus], self.mStatus[nNew]));
@@ -100,7 +109,7 @@ class File():
         elif (nNew == self.PARTIAL):
             self.saveSession();
         elif (nNew == self.DONE):
-            log.info('file uploaded');
+            log.debug('{} uploaded'.format(self));
             self.clearSession();
         elif (nNew == self.ERROR):
             log.error('encouter HTTP error code: {}'.format(self.nError));
@@ -109,7 +118,7 @@ class File():
         global log
         if (not sSessionFile):
             sSessionFile = config.sSessionFile;
-        log.info('save upload session to file {}'.format(sSessionFile));
+        log.debug('save upload session to file {}'.format(sSessionFile));
         sOut = '{}\n{}\n{}\n'.format(self.nBirth, self.sFile, self.sSessionUrl);
         with open(sSessionFile, 'wb') as f:
             f.write(sOut.encode('utf-8'));
@@ -117,7 +126,7 @@ class File():
         global log
         if (not sSessionFile):
             sSessionFile = config.sSessionFile;
-        if (not os.path.exists(sSessionFile)):
+        if (not os.path.isfile(sSessionFile)):
             log.debug('upload session file nonexistent, loading abort');
             return False
         log.debug('load upload session from file {}'.format(sSessionFile));
@@ -137,14 +146,22 @@ class File():
                 log.debug('status: {}\nsession url renewed to {}'.format(nStatus, sUrl));
                 return True
             else:
-                log.warning('inconsistent session, loading aborted');
+                log.debug('inconsistent session, loading abort');
+                try:
+                    os.remove(sSessionFile);
+                except FileNotFoundError as e:
+                    pass
                 return False
     def clearSession(self, sSessionFile=None):
         if (not sSessionFile):
             sSessionFile = config.sSessionFile;
         if (os.path.exists(sSessionFile)):
-            os.remove(sSessionFile);
-            log.debug('session file "{}" removed'.format(sSessionFile));
+            try:
+                os.remove(sSessionFile);
+            except FileNotFoundError as e:
+                pass
+            else:
+                log.debug('session file "{}" removed'.format(sSessionFile));
     def queryStatus(self):
         global log
         sUrl = self.sSessionUrl;
@@ -153,10 +170,8 @@ class File():
         mHeaders = {
                 'Content-Range': 'bytes */{}'.format(nSize),
         };
-        res = self.token.execute(sUrl, mHeaders=mHeaders, sMethod=sMethod);
+        res, sData = self.token.execute(sUrl, mHeaders=mHeaders, sMethod=sMethod);
         nStatus = res.status;
-        sData = res.read().decode('utf-8');
-        res.close();
         log.debug('query result:\n  status: {}\n  response: {}'.format(nStatus, sData));
         if (nStatus in [200, 201]):
             mData = json.loads(sData);
@@ -164,7 +179,7 @@ class File():
             self.shift(self.DONE);
         elif (nStatus == 308):
             sRange = res.getheader('Range')
-            log.info('uploaded: {}'.format(sRange));
+            log.debug('uploaded: {}'.format(sRange));
             if (sRange):
                 match = re.search(r'bytes=0-(\d+)', sRange);
                 self.nCursor = int(match.group(1)) + 1;
@@ -205,10 +220,8 @@ class File():
         else:
             bMeta = b'';
         log.debug('metadata to be sent: {}'.format(bMeta));
-        res = self.token.execute(sUrl, data=bMeta, mHeaders=mHeaders, sMethod=sMethod);
+        res, sData = self.token.execute(sUrl, data=bMeta, mHeaders=mHeaders, sMethod=sMethod);
         assert res.status == 200
-        sData = res.read();
-        res.close();
         if (res.status == 200):
             self.sSessionUrl = res.getheader('Location');
             self.nBirth = int(time.time());
@@ -221,7 +234,7 @@ class File():
     def upload(self, sUrl=None):
         global log
         if (self.nStatus == self.DONE):
-            log.info('upload already completed');
+            log.debug('upload already completed');
             return self.sId if self.sId else True
         if (not sUrl): sUrl = self.sSessionUrl;
         sMethod = 'PUT';
@@ -230,15 +243,13 @@ class File():
         mHeaders = {};
         if (self.nCursor):
             # do resume
-            log.info('resuming upload...');
+            log.debug('resuming upload...');
             sRange = 'bytes {}-{}/{}'.format(self.nCursor, nSize - 1, nSize);
             nLength = nSize - self.nCursor;
             mHeaders['Content-Range'] = sRange;
         mHeaders['Content-Length'] = nLength;
-        res = self.token.execute(sUrl, data=iData, mHeaders=mHeaders, sMethod=sMethod)
-        sData = res.read().decode('utf-8');
-        res.close();
-        log.info('response: {}'.format(sData));
+        res, sData = self.token.execute(sUrl, data=iData, mHeaders=mHeaders, sMethod=sMethod)
+        log.debug('response: {}'.format(sData));
         #log.debug('response headers: {}'.format(res.getheaders()));
         if (res.status in [200, 201]):
             mData = json.loads(sData);
