@@ -12,7 +12,7 @@ DATADIR = 'data';
 LOGLEVEL = logging.DEBUG;
 CLIENT = 'client_secret.json'
 WEBCLIENT = 'web_client_secret.json'
-RETRYCOUNT = 3;
+RETRYCOUNT = 5;
 SHOWPROGRESS = True;
 
 # variables for reference, normally not used

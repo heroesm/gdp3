@@ -130,13 +130,13 @@ class File():
             log.debug('upload session file nonexistent, loading abort');
             return False
         log.debug('load upload session from file {}'.format(sSessionFile));
-        with open(sSessionFile, 'rb') as file:
-            aData = file.readlines();
         try:
+            with open(sSessionFile, 'rb') as file:
+                aData = file.readlines();
             sTime, sFile, sUrl = [x.strip().decode('utf-8') for x in aData];
             nTime = int(sTime);
         except Exception as e:
-            log.exception('loading aborted');
+            log.debug('session loading aborted: {}'.format(e));
             return False
         else:
             if (nTime >= self.nBirth and sFile == self.sFile):

@@ -116,13 +116,11 @@ class CloudFile():
         return self.token and self.token.getAccessToken();
     def dirCheck(self):
         global DIRTYPE
-        if (self.sId):
-            if (not self.sMime):
-                self.getMetadata();
-            if (self.sMime == DIRTYPE):
-                return self.sId;
-            else:
-                return False;
+        assert self.sId;
+        if (not self.sMime):
+            self.getMetadata();
+        if (self.sMime == DIRTYPE):
+            return self.sId;
         else:
             return False;
     def getMetadata(self, sFields=None, sExportMime=None, isRaise=True):
@@ -391,12 +389,15 @@ class CloudFile():
             self.update(aOldDir, aNewDir);
         else:
             log.error('target is not a directory');
-    def getChildren(self, sName=None):
+    def getChildren(self, sName=None, isPrefix=False):
+        # WARNING: there are cases where client can not use "name = '<filename>'" to fetch the file desired even though <filename> is exactly equal to name of the desired file;
+        # using 'contains' instead of '=' (that is, "name contains '<filename>'") might be a workaround
         if (not self.dirCheck()):
             return False;
         else:
             if (sName):
-                sFilter = "name = '{}' and '{}' in parents and trashed = false".format(sName, self.sId);
+                sOperator = 'contains' if isPrefix else '=';
+                sFilter = "name {} '{}' and '{}' in parents and trashed = false".format(sOperator, sName, self.sId);
             else:
                 sFilter = "'{}' in parents and trashed = false".format(self.sId);
             aFiles = self.list(sFilter);
@@ -404,13 +405,14 @@ class CloudFile():
                 return aFiles;
             else:
                 return False;
-    def getDirChildren(self, sName=None):
+    def getDirChildren(self, sName=None, isPrefix=False):
         global DIRTYPE;
         if (not self.dirCheck()):
             return False;
         else:
             if (sName):
-                sFilter = "name = '{}' and '{}' in parents and mimeType = '{}' and trashed = false".format(sName, self.sId, DIRTYPE);
+                sOperator = 'contains' if isPrefix else '=';
+                sFilter = "name {} '{}' and '{}' in parents and mimeType = '{}' and trashed = false".format(sOperator, sName, self.sId, DIRTYPE);
             else:
                 sFilter = "'{}' in parents and mimeType = '{}' and trashed = false".format(self.sId, DIRTYPE);
             aFiles = self.list(sFilter);
