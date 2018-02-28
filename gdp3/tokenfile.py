@@ -27,7 +27,7 @@ def mergeQuery(sUrl, mQuery):
     sUrl = urllib.parse.urlunsplit(parts);
     return sUrl
 
-class TokenExecueError(Gdp3Error):
+class TokenExecuteError(Gdp3Error):
     def __init__(self, req):
         self.req = req;
 
@@ -251,7 +251,6 @@ class Token():
         req = urllib.request.Request(sUrl, data=data, headers=mHeaders, method=sMethod);
         log.debug('"{}" to "{}"'.format(req.get_method(), req.full_url));
         nCount = 0;
-        n403Count = 0;
         while nCount < config.nRetryCount:
             try:
                 socket.setdefaulttimeout(30);
@@ -280,17 +279,16 @@ class Token():
                                 'Authorization': '{} {}'.format(self.sType, sToken)
                         });
                         req = urllib.request.Request(sUrl, data=data, headers=mHeaders, method=sMethod);
-                elif (e.code == 403):
-                    # usageLimits
-                    n403Count += 1;
-                    log.warning('request "{}" encouter 403 Error: "{}"; thread sleep for {} seconds ...'.format(sUrl, e, 9*n403Count));
+                elif (e.code == 403 or e.code == 500):
+                    # usage limits or internal server error 
+                    log.warning('request "{}" encouter Error: "{}"; thread sleep for {} seconds ...'.format(sUrl, e, 9*(nCount+1)));
                     error = e;
                     errRes = getattr(e, 'fp', None);
                     if (errRes):
                         sErrData = errRes.read().decode('utf-8');
                         if (sErrData):
-                            log.error(sErrData);
-                    time.sleep(9*n403Count);
+                            log.debug(sErrData);
+                    time.sleep(9*(nCount+1));
                 else:
                     log.error('request "{}" failed due to: {}'.format(sUrl, e));
                     raise;
@@ -307,6 +305,6 @@ class Token():
                 return res, sData;
             nCount += 1;
         if (locals().get('error')):
-            raise TokenExecueError(req) from error;
+            raise TokenExecuteError(req) from error;
         else:
             return errRes, sErrData;
