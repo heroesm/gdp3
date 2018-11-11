@@ -292,10 +292,7 @@ class Token():
                 else:
                     log.error('request "{}" failed due to: {}'.format(sUrl, e));
                     raise;
-            except http.client.IncompleteRead as e:
-                error = e;
-                log.error('request "{}" failed due to: {}'.format(sUrl, e));
-            except urllib.error.URLError as e:
+            except (http.client.IncompleteRead, urllib.error.URLError, ConnectionError) as e:
                 error = e;
                 log.error('request "{}" failed due to: {}'.format(sUrl, e));
             except socket.timeout as e:
